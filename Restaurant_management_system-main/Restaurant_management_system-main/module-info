@@ -1,0 +1,14 @@
+    // src/main/java/module-info.java
+    module Project { // *** CRITICAL: This MUST match your project's module name (e.g., from your build config) ***
+        requires javafx.controls;
+        requires javafx.fxml;
+        requires javafx.graphics;
+        requires java.sql;
+        // This requires the MySQL Connector/J JAR to be properly on the --module-path.
+        // The module name is 'mysql.connector.java' for modern versions (8.x).
+       
+        // *** CRUCIAL: Opens 'application' package for JavaFX reflective access (PropertyValueFactory) ***
+        opens application to javafx.base, javafx.controls, javafx.graphics;
+        exports application; // Makes the 'application' package visible to other modules (like the JVM launching it)
+    }
+    

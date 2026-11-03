@@ -1,0 +1,515 @@
+package application;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
+public class RestaurantDAO {
+
+    public static void initializeDatabase() {
+        Connection conn = null;
+        Statement stmt = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn != null) {
+                stmt = conn.createStatement();
+
+                // Explicitly ensure the correct database is used for all operations
+                stmt.executeUpdate("CREATE DATABASE IF NOT EXISTS restaurant_db");
+                stmt.executeUpdate("USE restaurant_db"); // *** CRUCIAL ***
+
+                System.out.println("Attempting to create/verify database tables...");
+
+                // Create menu_items table
+                stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS menu_items (" +
+                    "id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "name VARCHAR(255) NOT NULL UNIQUE," +
+                    "price DOUBLE NOT NULL," +
+                    "quantity INT NOT NULL" +
+                    ")"
+                );
+                System.out.println("Table 'menu_items' checked/created.");
+
+                // Create orders table
+                stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS orders (" +
+                    "order_id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "customer_name VARCHAR(255) NOT NULL," +
+                    "total_amount DOUBLE NOT NULL," +
+                    "is_paid BOOLEAN NOT NULL DEFAULT FALSE," +
+                    "payment_method VARCHAR(50) DEFAULT 'Unpaid'" +
+                    ")"
+                );
+                System.out.println("Table 'orders' checked/created.");
+
+
+                // Create order_items table
+                stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS order_items (" +
+                    "order_item_id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "order_id INT NOT NULL," +
+                    "menu_item_id INT NOT NULL," +
+                    "quantity INT NOT NULL," +
+                    "item_total DOUBLE NOT NULL," +
+                    "FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE," +
+                    "FOREIGN KEY (menu_item_id) REFERENCES menu_items(id) ON DELETE RESTRICT" +
+                    ")"
+                );
+                System.out.println("Table 'order_items' checked/created.");
+
+
+                // Create reservations table
+                stmt.executeUpdate(
+                    "CREATE TABLE IF NOT EXISTS reservations (" +
+                    "reservation_id INT AUTO_INCREMENT PRIMARY KEY," +
+                    "customer_name VARCHAR(255) NOT NULL," +
+                    "table_number INT NOT NULL" +
+                    ")"
+                );
+                System.out.println("Table 'reservations' checked/created.");
+
+
+                // Insert initial menu items if table is empty
+                // IMPORTANT: We use a separate connection for getMenuItemsStatic to ensure it's fresh
+                if (getMenuItemsStatic().isEmpty()) {
+                    System.out.println("Menu items table is empty. Inserting initial menu items...");
+                    addMenuItemStatic(new MenuItem(0, "Mutton Biryani", 250.0, 10));
+                    addMenuItemStatic(new MenuItem(0, "Chicken 65", 150.0, 15));
+                    addMenuItemStatic(new MenuItem(0, "Mojito", 100.0, 20));
+                    addMenuItemStatic(new MenuItem(0, "Chicken Biryani", 150.0, 10));
+                    addMenuItemStatic(new MenuItem(0, "Cake", 80.0, 10));
+                    addMenuItemStatic(new MenuItem(0, "Chocolate Brownie", 200.0, 15));
+                    System.out.println("Default menu items insertion attempt complete.");
+
+                    // Verify items after insertion
+                    if (!getMenuItemsStatic().isEmpty()) {
+                        System.out.println("Successfully inserted initial menu items.");
+                    } else {
+                        System.err.println("WARNING: Initial menu items not found after insertion attempt. Check for errors during addMenuItemStatic.");
+                    }
+
+                } else {
+                    System.out.println("Menu items already exist in the database. Skipping initial insertion.");
+                }
+
+                System.out.println("Database initialization complete.");
+            }
+        } catch (SQLException e) {
+            System.err.println("ERROR during database initialization: " + e.getMessage());
+            e.printStackTrace(); // Print full stack trace for detailed error
+        } finally {
+            DBConnection.closeConnection(conn);
+            if (stmt != null) {
+                try { stmt.close(); } catch (SQLException e) { /* Ignore */ }
+            }
+        }
+    }
+
+    /**
+     * Static helper method to get menu items, used during initialization.
+     * Ensures operations are on the 'restaurant_db' by getting a new connection.
+     */
+    private static List<MenuItem> getMenuItemsStatic() {
+        List<MenuItem> menu = new ArrayList<>();
+        String sql = "SELECT id, name, price, quantity FROM menu_items";
+        try (Connection conn = DBConnection.getConnection(); // Get a fresh connection to restaurant_db
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            while (rs.next()) {
+                menu.add(new MenuItem(
+                        rs.getInt("id"),
+                        rs.getString("name"),
+                        rs.getDouble("price"),
+                        rs.getInt("quantity")
+                ));
+            }
+            // System.out.println("Fetched " + menu.size() + " menu items statically."); // Too verbose normally
+        } catch (SQLException e) {
+            System.err.println("ERROR fetching menu items (static): " + e.getMessage());
+            e.printStackTrace(); // Print full stack trace
+        }
+        return menu;
+    }
+
+    /**
+     * Static helper method to add menu items, used during initialization.
+     * Ensures operations are on the 'restaurant_db' by getting a new connection.
+     */
+    private static void addMenuItemStatic(MenuItem item) {
+        String sql = "INSERT INTO menu_items (name, price, quantity) VALUES (?, ?, ?)";
+        try (Connection conn = DBConnection.getConnection(); // Get a fresh connection to restaurant_db
+             PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            pstmt.setString(1, item.getName());
+            pstmt.setDouble(2, item.getPrice());
+            pstmt.setInt(3, item.getQuantity());
+            int rowsAffected = pstmt.executeUpdate();
+            System.out.println("Attempted to insert '" + item.getName() + "'. Rows affected: " + rowsAffected);
+
+            if (rowsAffected > 0) {
+                try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        item.setId(generatedKeys.getInt(1));
+                        System.out.println("Inserted '" + item.getName() + "' with ID: " + item.getId());
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            if (e.getSQLState().startsWith("23")) { // SQLState for integrity constraint violation (e.g., UNIQUE constraint)
+                System.out.println("Attempted to add duplicate menu item: " + item.getName() + ". Skipping.");
+            } else {
+                System.err.println("ERROR adding menu item (static): " + e.getMessage());
+                e.printStackTrace(); // Print full stack trace for detailed error
+            }
+        }
+    }
+
+
+    public List<MenuItem> getAllMenuItems() {
+        List<MenuItem> menu = new ArrayList<>();
+        String sql = "SELECT id, name, price, quantity FROM menu_items";
+        try (Connection conn = DBConnection.getConnection();
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(sql)) {
+
+            while (rs.next()) {
+                menu.add(new MenuItem(
+                        rs.getInt("id"),
+                        rs.getString("name"),
+                        rs.getDouble("price"),
+                        rs.getInt("quantity")
+                ));
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching menu items: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return menu;
+    }
+
+    public MenuItem getMenuItemById(int id) {
+        String sql = "SELECT id, name, price, quantity FROM menu_items WHERE id = ?";
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, id);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                if (rs.next()) {
+                    return new MenuItem(
+                            rs.getInt("id"),
+                            rs.getString("name"),
+                            rs.getDouble("price"),
+                            rs.getInt("quantity")
+                    );
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching menu item by ID: " + e.getMessage());
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public void addMenuItem(MenuItem item) {
+        String sql = "INSERT INTO menu_items (name, price, quantity) VALUES (?, ?, ?)";
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            pstmt.setString(1, item.getName());
+            pstmt.setDouble(2, item.getPrice());
+            pstmt.setInt(3, item.getQuantity());
+            pstmt.executeUpdate();
+
+            try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                if (generatedKeys.next()) {
+                    item.setId(generatedKeys.getInt(1));
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error adding menu item: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void updateMenuItem(MenuItem item) {
+        String sql = "UPDATE menu_items SET name = ?, price = ?, quantity = ? WHERE id = ?";
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, item.getName());
+            pstmt.setDouble(2, item.getPrice());
+            pstmt.setInt(3, item.getQuantity());
+            pstmt.setInt(4, item.getId());
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Error updating menu item: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public void deleteMenuItem(int id) {
+        String sql = "DELETE FROM menu_items WHERE id = ?";
+        try (Connection conn = DBConnection.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setInt(1, id);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("Error deleting menu item: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    public int addOrder(Order order) {
+        String sqlOrder = "INSERT INTO orders (customer_name, total_amount, is_paid, payment_method) VALUES (?, ?, ?, ?)";
+        String sqlOrderItem = "INSERT INTO order_items (order_id, menu_item_id, quantity, item_total) VALUES (?, ?, ?, ?)";
+        int orderId = -1;
+
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for addOrder.");
+                return -1;
+            }
+            conn.setAutoCommit(false); // Start transaction
+
+            try (PreparedStatement pstmtOrder = conn.prepareStatement(sqlOrder, Statement.RETURN_GENERATED_KEYS)) {
+                pstmtOrder.setString(1, order.getCustomerName());
+                pstmtOrder.setDouble(2, order.getTotal());
+                pstmtOrder.setBoolean(3, order.getIsPaid());
+                pstmtOrder.setString(4, order.getPaymentMethod());
+                pstmtOrder.executeUpdate();
+
+                try (ResultSet generatedKeys = pstmtOrder.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        orderId = generatedKeys.getInt(1);
+                        order.setId(orderId);
+                    }
+                }
+            }
+
+            try (PreparedStatement pstmtOrderItem = conn.prepareStatement(sqlOrderItem)) {
+                for (OrderItem oi : order.getItems()) {
+                    pstmtOrderItem.setInt(1, orderId);
+                    pstmtOrderItem.setInt(2, oi.getItem().getId());
+                    pstmtOrderItem.setInt(3, oi.getQuantity());
+                    pstmtOrderItem.setDouble(4, oi.getTotal());
+                    pstmtOrderItem.addBatch();
+                }
+                pstmtOrderItem.executeBatch();
+            }
+
+            conn.commit(); // Commit transaction
+        } catch (SQLException e) {
+            System.err.println("Error adding order: " + e.getMessage());
+            e.printStackTrace();
+            if (conn != null) {
+                try { conn.rollback(); } catch (SQLException rollbackEx) {
+                    System.err.println("Error during rollback: " + rollbackEx.getMessage());
+                }
+            }
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+        return orderId;
+    }
+
+    public void updateOrder(Order order) {
+        String sqlOrder = "UPDATE orders SET customer_name = ?, total_amount = ?, is_paid = ?, payment_method = ? WHERE order_id = ?";
+        String sqlDeleteOrderItems = "DELETE FROM order_items WHERE order_id = ?";
+        String sqlInsertOrderItem = "INSERT INTO order_items (order_id, menu_item_id, quantity, item_total) VALUES (?, ?, ?, ?)";
+
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for updateOrder.");
+                return;
+            }
+            conn.setAutoCommit(false);
+
+            try (PreparedStatement pstmtOrder = conn.prepareStatement(sqlOrder)) {
+                pstmtOrder.setString(1, order.getCustomerName());
+                pstmtOrder.setDouble(2, order.getTotal());
+                pstmtOrder.setBoolean(3, order.getIsPaid());
+                pstmtOrder.setString(4, order.getPaymentMethod());
+                pstmtOrder.setInt(5, order.getId());
+                pstmtOrder.executeUpdate();
+            }
+
+            try (PreparedStatement pstmtDelete = conn.prepareStatement(sqlDeleteOrderItems)) {
+                pstmtDelete.setInt(1, order.getId());
+                pstmtDelete.executeUpdate();
+            }
+
+            try (PreparedStatement pstmtInsert = conn.prepareStatement(sqlInsertOrderItem)) {
+                for (OrderItem oi : order.getItems()) {
+                    pstmtInsert.setInt(1, order.getId());
+                    pstmtInsert.setInt(2, oi.getItem().getId());
+                    pstmtInsert.setInt(3, oi.getQuantity());
+                    pstmtInsert.setDouble(4, oi.getTotal());
+                    pstmtInsert.addBatch();
+                }
+                pstmtInsert.executeBatch();
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            System.err.println("Error updating order: " + e.getMessage());
+            e.printStackTrace();
+            if (conn != null) {
+                try { conn.rollback(); } catch (SQLException rollbackEx) {
+                    System.err.println("Error during rollback: " + rollbackEx.getMessage());
+                }
+            }
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+    }
+
+
+    public List<Order> getAllOrders() {
+        List<Order> orders = new ArrayList<>();
+        String sqlOrders = "SELECT order_id, customer_name, total_amount, is_paid, payment_method FROM orders";
+        String sqlOrderItems = "SELECT oi.order_item_id, oi.order_id, oi.quantity, oi.item_total, mi.id AS menu_item_id, mi.name AS menu_item_name, mi.price AS menu_item_price, mi.quantity AS menu_item_stock " +
+                               "FROM order_items oi JOIN menu_items mi ON oi.menu_item_id = mi.id WHERE oi.order_id = ?";
+
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for getAllOrders.");
+                return orders;
+            }
+
+            try (Statement stmtOrders = conn.createStatement();
+                 ResultSet rsOrders = stmtOrders.executeQuery(sqlOrders)) {
+
+                while (rsOrders.next()) {
+                    int orderId = rsOrders.getInt("order_id");
+                    Order order = new Order(
+                            orderId,
+                            rsOrders.getString("customer_name"),
+                            rsOrders.getDouble("total_amount"),
+                            rsOrders.getBoolean("is_paid"),
+                            rsOrders.getString("payment_method")
+                    );
+
+                    try (PreparedStatement pstmtOrderItems = conn.prepareStatement(sqlOrderItems)) {
+                        pstmtOrderItems.setInt(1, orderId);
+                        try (ResultSet rsOrderItems = pstmtOrderItems.executeQuery()) {
+                            while (rsOrderItems.next()) {
+                                MenuItem menuItem = new MenuItem(
+                                        rsOrderItems.getInt("menu_item_id"),
+                                        rsOrderItems.getString("menu_item_name"),
+                                        rsOrderItems.getDouble("menu_item_price"),
+                                        rsOrderItems.getInt("menu_item_stock")
+                                );
+                                order.addItem(new OrderItem(
+                                        rsOrderItems.getInt("order_item_id"),
+                                        rsOrderItems.getInt("order_id"),
+                                        menuItem,
+                                        rsOrderItems.getInt("quantity")
+                                ));
+                            }
+                        }
+                    }
+                    orders.add(order);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching orders: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+        return orders;
+    }
+
+    public List<Reservation> getAllReservations() {
+        List<Reservation> reservations = new ArrayList<>();
+        String sql = "SELECT reservation_id, customer_name, table_number FROM reservations";
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for getAllReservations.");
+                return reservations;
+            }
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+
+                while (rs.next()) {
+                    reservations.add(new Reservation(
+                            rs.getInt("reservation_id"),
+                            rs.getString("customer_name"),
+                            rs.getInt("table_number")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching reservations: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+        return reservations;
+    }
+
+    public void addReservation(Reservation reservation) {
+        String sql = "INSERT INTO reservations (customer_name, table_number) VALUES (?, ?)";
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for addReservation.");
+                return;
+            }
+            try (PreparedStatement pstmt = conn.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+                pstmt.setString(1, reservation.getCustomerName());
+                pstmt.setInt(2, reservation.getTableNumber());
+                pstmt.executeUpdate();
+
+                try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
+                    if (generatedKeys.next()) {
+                        reservation.setId(generatedKeys.getInt(1));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error adding reservation: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+    }
+
+    public double getTotalSales() {
+        String sql = "SELECT SUM(total_amount) FROM orders WHERE is_paid = TRUE";
+        Connection conn = null;
+        try {
+            conn = DBConnection.getConnection();
+            if (conn == null) {
+                System.err.println("Failed to get connection for getTotalSales.");
+                return 0.0;
+            }
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(sql)) {
+                if (rs.next()) {
+                    return rs.getDouble(1);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error fetching total sales: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            DBConnection.closeConnection(conn);
+        }
+        return 0.0;
+    }
+
+	public void deleteReservation(int id) {
+		// TODO Auto-generated method stub
+		
+	}
+}

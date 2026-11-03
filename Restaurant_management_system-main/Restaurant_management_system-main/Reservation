@@ -1,0 +1,63 @@
+package application;
+
+import javafx.beans.property.IntegerProperty;
+import javafx.beans.property.SimpleIntegerProperty;
+import javafx.beans.property.SimpleStringProperty;
+import javafx.beans.property.StringProperty;
+
+public class Reservation {
+    private IntegerProperty id;
+    private StringProperty customerName;
+    private IntegerProperty tableNumber;
+
+    public Reservation(int id, String customerName, int tableNumber) {
+        this.id = new SimpleIntegerProperty(id);
+        this.customerName = new SimpleStringProperty(customerName);
+        this.tableNumber = new SimpleIntegerProperty(tableNumber);
+    }
+
+    public Reservation(String customerName, int tableNumber) {
+        this.id = new SimpleIntegerProperty(0); // Will be set by DAO
+        this.customerName = new SimpleStringProperty(customerName);
+        this.tableNumber = new SimpleIntegerProperty(tableNumber);
+    }
+
+    // Getters for properties
+    public IntegerProperty idProperty() {
+        return id;
+    }
+
+    public StringProperty customerNameProperty() {
+        return customerName;
+    }
+
+    public IntegerProperty tableNumberProperty() {
+        return tableNumber;
+    }
+
+    // Regular getters
+    public int getId() {
+        return id.get();
+    }
+
+    public String getCustomerName() {
+        return customerName.get();
+    }
+
+    public int getTableNumber() {
+        return tableNumber.get();
+    }
+
+    // Setters
+    public void setId(int id) {
+        this.id.set(id);
+    }
+
+    public void setCustomerName(String customerName) {
+        this.customerName.set(customerName);
+    }
+
+    public void setTableNumber(int tableNumber) {
+        this.tableNumber.set(tableNumber);
+    }
+}

@@ -1,0 +1,932 @@
+package application;
+
+import javafx.application.Application;
+import javafx.application.Platform;
+import javafx.collections.FXCollections;
+import javafx.collections.ObservableList;
+import javafx.geometry.Insets;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.control.Alert.AlertType;
+import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.VBox;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontWeight;
+import javafx.stage.Stage;
+
+import java.util.Optional;
+import java.util.List;
+
+public class Main extends Application {
+
+    private RestaurantDAO dao = new RestaurantDAO();
+    private ObservableList<MenuItem> menuItems;
+    private ObservableList<Order> allOrders;
+    private ObservableList<Reservation> allReservations;
+    private Stage primaryStage;
+
+    @Override
+    public void start(Stage primaryStage) {
+        this.primaryStage = primaryStage;
+        primaryStage.setTitle("Achievers Restaurant Management System");
+        primaryStage.setScene(createRoleSelectionScene());
+        primaryStage.show();
+
+        // Initial load of data. The DB initialization happens in main().
+        loadDataFromDatabase();
+    }
+
+    private void loadDataFromDatabase() {
+        menuItems = FXCollections.observableArrayList(dao.getAllMenuItems());
+        allOrders = FXCollections.observableArrayList(dao.getAllOrders());
+        allReservations = FXCollections.observableArrayList(dao.getAllReservations());
+    }
+
+    private Scene createRoleSelectionScene() {
+        VBox root = new VBox(20);
+        root.setAlignment(Pos.CENTER);
+        root.setPadding(new Insets(50));
+
+        Label title = new Label("Welcome to Achievers Restaurant");
+        title.setFont(Font.font("Arial", FontWeight.BOLD, 24));
+
+        Button userButton = new Button("User");
+        userButton.setMinSize(150, 50);
+        userButton.setOnAction(e -> showUserLogin());
+
+        Button adminButton = new Button("Admin");
+        adminButton.setMinSize(150, 50);
+        adminButton.setOnAction(e -> showAdminLogin());
+
+        Button exitButton = new Button("Exit");
+        exitButton.setMinSize(150, 50);
+        exitButton.setOnAction(e -> Platform.exit());
+
+        root.getChildren().addAll(title, userButton, adminButton, exitButton);
+        return new Scene(root, 600, 400);
+    }
+
+    private void showUserLogin() {
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("User Login");
+        dialog.setHeaderText("Enter your name to proceed as a user.");
+        dialog.setContentText("Name:");
+
+        Optional<String> result = dialog.showAndWait();
+        result.ifPresent(name -> {
+            if (name.trim().isEmpty()) {
+                showAlert(AlertType.ERROR, "Invalid Input", "Name cannot be empty.");
+                showUserLogin();
+                return;
+            }
+            // Refresh all orders to get latest payment status for user check
+            allOrders.setAll(dao.getAllOrders());
+            // Check for unpaid orders for this user
+            for (Order o : allOrders) {
+                if (o.getCustomerName().equalsIgnoreCase(name) && !o.getIsPaid()) {
+                    showUnpaidOrderDialog(o);
+                    if (!o.getIsPaid()) { // If user still hasn't paid after dialog, prevent access
+                        return;
+                    }
+                }
+            }
+            showUserMenu(name);
+        });
+    }
+
+    private void showUnpaidOrderDialog(Order unpaidOrder) {
+        Alert alert = new Alert(AlertType.CONFIRMATION);
+        alert.setTitle("Unpaid Order Detected");
+        alert.setHeaderText("You have an unpaid order, " + unpaidOrder.getCustomerName() + "!");
+
+        VBox content = new VBox(5);
+        content.getChildren().add(new Label("Order Details:"));
+        // Ensure order items are loaded for the unpaid order
+        unpaidOrder.getItems().forEach(oi ->
+                content.getChildren().add(new Label(oi.getItem().getName() + " x" + oi.getQuantity() + " = Rs. " + String.format("%.2f", oi.getTotal())))
+        );
+        content.getChildren().add(new Label("Total: Rs. " + String.format("%.2f", unpaidOrder.getTotal())));
+
+        alert.getDialogPane().setContent(content);
+        alert.setContentText("Pay now to continue?");
+
+        ButtonType payButton = new ButtonType("Pay Now", ButtonBar.ButtonData.OK_DONE);
+        ButtonType cancelButton = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(payButton, cancelButton);
+
+        Optional<ButtonType> result = alert.showAndWait();
+
+        if (result.isPresent() && result.get() == payButton) {
+            ChoiceDialog<String> paymentDialog = new ChoiceDialog<>("Cash", "Cash", "Card");
+            paymentDialog.setTitle("Payment Method");
+            paymentDialog.setHeaderText("Select your payment method:");
+            paymentDialog.setContentText("Method:");
+
+            Optional<String> paymentResult = paymentDialog.showAndWait();
+            paymentResult.ifPresent(method -> {
+                unpaidOrder.setPaymentMethod(method);
+                unpaidOrder.setIsPaid(true);
+                dao.updateOrder(unpaidOrder); // Update order in DB
+                showAlert(AlertType.INFORMATION, "Payment Successful", "Payment successful via " + method + "!");
+                // Refresh all orders list after payment
+                allOrders.setAll(dao.getAllOrders());
+            });
+        } else {
+            showAlert(AlertType.WARNING, "Payment Required", "You must pay the bill to continue.");
+            // Keep user on the unpaid order dialog until they pay
+            showUnpaidOrderDialog(unpaidOrder);
+        }
+    }
+
+
+    private void showAdminLogin() {
+        TextInputDialog passwordDialog = new TextInputDialog();
+        passwordDialog.setTitle("Admin Login");
+        passwordDialog.setHeaderText("Enter admin password.");
+        passwordDialog.setContentText("Password:");
+
+        Optional<String> result = passwordDialog.showAndWait();
+        result.ifPresent(password -> {
+            if (password.equals("1234")) { // Admin password
+                showAdminMenu();
+            } else {
+                showAlert(AlertType.ERROR, "Login Failed", "Incorrect password.");
+            }
+        });
+    }
+
+    private void showUserMenu(String customerName) {
+        BorderPane userRoot = new BorderPane();
+        Label title = new Label("Welcome, " + customerName + "!");
+        title.setFont(Font.font("Arial", FontWeight.BOLD, 20));
+        BorderPane.setAlignment(title, Pos.CENTER);
+        BorderPane.setMargin(title, new Insets(10));
+        userRoot.setTop(title);
+
+        VBox userMenuOptions = new VBox(10);
+        userMenuOptions.setAlignment(Pos.TOP_LEFT);
+        userMenuOptions.setPadding(new Insets(20));
+
+        Button viewMenuButton = new Button("View Menu");
+        viewMenuButton.setMaxWidth(Double.MAX_VALUE);
+        viewMenuButton.setOnAction(e -> showViewMenu(userRoot));
+
+        Button placeOrderButton = new Button("Place Order");
+        placeOrderButton.setMaxWidth(Double.MAX_VALUE);
+        placeOrderButton.setOnAction(e -> showPlaceOrder(customerName, userRoot));
+
+        Button reserveTableButton = new Button("Reserve Table");
+        reserveTableButton.setMaxWidth(Double.MAX_VALUE);
+        reserveTableButton.setOnAction(e -> showReserveTable(customerName));
+
+        Button logoutButton = new Button("Logout");
+        logoutButton.setMaxWidth(Double.MAX_VALUE);
+        logoutButton.setOnAction(e -> primaryStage.setScene(createRoleSelectionScene()));
+
+        userMenuOptions.getChildren().addAll(viewMenuButton, placeOrderButton, reserveTableButton, logoutButton);
+        userRoot.setLeft(userMenuOptions);
+
+        Label welcomeContent = new Label("Select an option from the left menu.");
+        welcomeContent.setFont(Font.font("Arial", 16));
+        welcomeContent.setAlignment(Pos.CENTER);
+        BorderPane.setAlignment(welcomeContent, Pos.CENTER);
+        userRoot.setCenter(welcomeContent);
+
+        primaryStage.setScene(new Scene(userRoot, 800, 600));
+    }
+
+    private void showAdminMenu() {
+        BorderPane adminRoot = new BorderPane();
+        Label title = new Label("Admin Panel");
+        title.setFont(Font.font("Arial", FontWeight.BOLD, 20));
+        BorderPane.setAlignment(title, Pos.CENTER);
+        BorderPane.setMargin(title, new Insets(10));
+        adminRoot.setTop(title);
+
+        VBox adminMenuOptions = new VBox(10);
+        adminMenuOptions.setAlignment(Pos.TOP_LEFT);
+        adminMenuOptions.setPadding(new Insets(20));
+
+        Button viewMenuButton = new Button("View Menu");
+        viewMenuButton.setMaxWidth(Double.MAX_VALUE);
+        viewMenuButton.setOnAction(e -> showAdminViewMenu(adminRoot));
+
+        Button addItemButton = new Button("Add New Item");
+        addItemButton.setMaxWidth(Double.MAX_VALUE);
+        addItemButton.setOnAction(e -> showAddItemDialog());
+
+        Button viewOrdersButton = new Button("View Orders");
+        viewOrdersButton.setMaxWidth(Double.MAX_VALUE);
+        viewOrdersButton.setOnAction(e -> showViewOrders(adminRoot));
+
+        Button viewSalesButton = new Button("View Sales");
+        viewSalesButton.setMaxWidth(Double.MAX_VALUE);
+        viewSalesButton.setOnAction(e -> showViewSales());
+
+        Button viewReservationsButton = new Button("View Reservations");
+        viewReservationsButton.setMaxWidth(Double.MAX_VALUE);
+        viewReservationsButton.setOnAction(e -> showViewReservations(adminRoot));
+
+        Button logoutButton = new Button("Logout");
+        logoutButton.setMaxWidth(Double.MAX_VALUE);
+        logoutButton.setOnAction(e -> primaryStage.setScene(createRoleSelectionScene()));
+
+        adminMenuOptions.getChildren().addAll(viewMenuButton, addItemButton, viewOrdersButton, viewSalesButton, viewReservationsButton, logoutButton);
+        adminRoot.setLeft(adminMenuOptions);
+
+        Label welcomeContent = new Label("Select an option from the left menu.");
+        welcomeContent.setFont(Font.font("Arial", 16));
+        welcomeContent.setAlignment(Pos.CENTER);
+        BorderPane.setAlignment(welcomeContent, Pos.CENTER);
+        adminRoot.setCenter(welcomeContent);
+
+        primaryStage.setScene(new Scene(adminRoot, 800, 600));
+    }
+
+    private void showViewMenu(BorderPane parentPane) {
+        // FIX: Refresh menu items from the database when the user views the menu
+        menuItems.setAll(dao.getAllMenuItems());
+
+        TableView<MenuItem> menuTable = new TableView<>();
+        menuTable.setItems(menuItems);
+
+        // Using PropertyValueFactory for direct property access (requires module-info opens)
+        TableColumn<MenuItem, Integer> idCol = new TableColumn<>("ID");
+        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
+
+        TableColumn<MenuItem, String> nameCol = new TableColumn<>("Name");
+        nameCol.setCellValueFactory(new PropertyValueFactory<>("name"));
+
+        TableColumn<MenuItem, Double> priceCol = new TableColumn<>("Price (Rs.)");
+        priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
+
+        TableColumn<MenuItem, Integer> stockCol = new TableColumn<>("Stock");
+        stockCol.setCellValueFactory(new PropertyValueFactory<>("quantity"));
+
+        menuTable.getColumns().addAll(idCol, nameCol, priceCol, stockCol);
+        menuTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        VBox content = new VBox(10, new Label("Restaurant Menu"), menuTable);
+        content.setPadding(new Insets(20));
+        parentPane.setCenter(content);
+    }
+
+    private void showPlaceOrder(String customerName, BorderPane parentPane) {
+        Order currentOrder = new Order(customerName);
+        // The Order class now has a listener on its items list,
+        // so adding to currentOrder.getItems() will trigger recalculateTotal().
+        ObservableList<OrderItem> currentOrderItems = currentOrder.getItems();
+
+
+        TableView<MenuItem> menuTable = new TableView<>();
+        // Refresh menu items here as well, in case stock changed recently
+        menuItems.setAll(dao.getAllMenuItems());
+        menuTable.setItems(menuItems);
+
+        TableColumn<MenuItem, Integer> idCol = new TableColumn<>("ID");
+        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
+
+        TableColumn<MenuItem, String> nameCol = new TableColumn<>("Name");
+        nameCol.setCellValueFactory(new PropertyValueFactory<>("name"));
+
+        TableColumn<MenuItem, Double> priceCol = new TableColumn<>("Price (Rs.)");
+        priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
+
+        TableColumn<MenuItem, Integer> stockCol = new TableColumn<>("Stock");
+        stockCol.setCellValueFactory(new PropertyValueFactory<>("quantity"));
+
+        menuTable.getColumns().addAll(idCol, nameCol, priceCol, stockCol);
+        menuTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        TextField itemIdField = new TextField();
+        itemIdField.setPromptText("Enter Item ID");
+        TextField quantityField = new TextField();
+        quantityField.setPromptText("Enter Quantity");
+
+        Button addToOrderButton = new Button("Add to Order");
+        addToOrderButton.setOnAction(e -> {
+            try {
+                int itemId = Integer.parseInt(itemIdField.getText());
+                int qty = Integer.parseInt(quantityField.getText());
+
+                if (qty <= 0) {
+                    showAlert(AlertType.WARNING, "Invalid Quantity", "Quantity must be a positive number.");
+                    return;
+                }
+
+                MenuItem selectedMenuItem = dao.getMenuItemById(itemId); // Fetch from DB to get latest stock
+                if (selectedMenuItem != null) {
+                    if (selectedMenuItem.getQuantity() >= qty) {
+                        // Check if item already in current order
+                        Optional<OrderItem> existingOrderItem = currentOrderItems.stream()
+                                .filter(oi -> oi.getItem().getId() == itemId)
+                                .findFirst();
+
+                        if (existingOrderItem.isPresent()) {
+                            OrderItem oi = existingOrderItem.get();
+                            oi.setQuantity(oi.getQuantity() + qty); // setQuantity in OrderItem recalculates its own total
+                        } else {
+                            currentOrder.addItem(new OrderItem(selectedMenuItem, qty)); // This will trigger the listener in Order
+                        }
+                        
+                        // Update stock in DB and refresh menu display
+                        selectedMenuItem.setQuantity(selectedMenuItem.getQuantity() - qty);
+                        dao.updateMenuItem(selectedMenuItem);
+                        menuItems.setAll(dao.getAllMenuItems()); // Refresh menu display in the table
+                        // currentOrder.recalculateTotal(); // Removed, as listener on items should handle it
+                        showAlert(AlertType.INFORMATION, "Item Added", qty + " x " + selectedMenuItem.getName() + " added to order.");
+                    } else {
+                        showAlert(AlertType.WARNING, "Not Enough Stock", "Only " + selectedMenuItem.getQuantity() + " of " + selectedMenuItem.getName() + " available.");
+                    }
+                } else {
+                    showAlert(AlertType.ERROR, "Item Not Found", "No menu item found with ID: " + itemId);
+                }
+                itemIdField.clear();
+                quantityField.clear();
+            } catch (NumberFormatException ex) {
+                showAlert(AlertType.ERROR, "Invalid Input", "Please enter valid numbers for Item ID and Quantity.");
+            }
+        });
+
+        TableView<OrderItem> orderSummaryTable = new TableView<>();
+        orderSummaryTable.setItems(currentOrderItems); // Bind to currentOrder.getItems()
+
+        TableColumn<OrderItem, String> orderedItemNameCol = new TableColumn<>("Item");
+        orderedItemNameCol.setCellValueFactory(cellData -> cellData.getValue().getItem().nameProperty());
+
+        TableColumn<OrderItem, Integer> orderedQuantityCol = new TableColumn<>("Quantity");
+        orderedQuantityCol.setCellValueFactory(new PropertyValueFactory<>("quantity"));
+
+        TableColumn<OrderItem, Double> orderedTotalCol = new TableColumn<>("Subtotal (Rs.)");
+        orderedTotalCol.setCellValueFactory(new PropertyValueFactory<>("total"));
+
+        orderSummaryTable.getColumns().addAll(orderedItemNameCol, orderedQuantityCol, orderedTotalCol);
+        orderSummaryTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        Label orderTotalLabel = new Label("Order Total: Rs. 0.00");
+        orderTotalLabel.textProperty().bind(currentOrder.totalProperty().asString("Order Total: Rs. %.2f")); // Correct binding
+
+        Button finalizeOrderButton = new Button("Finalize Order & Pay");
+        finalizeOrderButton.setOnAction(e -> {
+            if (currentOrderItems.isEmpty()) {
+                showAlert(AlertType.WARNING, "Empty Order", "Please add items to your order before finalizing.");
+                return;
+            }
+            // Ensure total is up-to-date before adding to DB
+            currentOrder.recalculateTotal(); // Explicit call just before finalizing
+            int orderId = dao.addOrder(currentOrder);
+            if (orderId != -1) {
+                allOrders.add(currentOrder); // Add to observable list for admin view
+                showPaymentDialog(currentOrder);
+            } else {
+                showAlert(AlertType.ERROR, "Order Failed", "Could not place the order. Please try again.");
+            }
+        });
+
+
+        VBox orderInput = new VBox(10, new Label("Add Items to Order:"),
+                new HBox(10, itemIdField, quantityField, addToOrderButton));
+        orderInput.setPadding(new Insets(10));
+        orderInput.setStyle("-fx-border-color: lightgray; -fx-border-width: 1; -fx-padding: 10;");
+
+        VBox content = new VBox(15, new Label("Place Your Order"), menuTable, orderInput, new Label("Your Current Order:"), orderSummaryTable, orderTotalLabel, finalizeOrderButton);
+        content.setPadding(new Insets(20));
+        parentPane.setCenter(content);
+    }
+
+    private void showPaymentDialog(Order order) {
+        Alert alert = new Alert(AlertType.CONFIRMATION);
+        alert.setTitle("Payment Confirmation");
+        alert.setHeaderText("Your order has been placed successfully!");
+        // Get the final total directly from the order object
+        alert.setContentText("Total amount to pay: Rs. " + String.format("%.2f", order.getTotal()) + "\nPay now?");
+
+        ButtonType payButton = new ButtonType("Pay Now", ButtonBar.ButtonData.OK_DONE);
+        ButtonType laterButton = new ButtonType("Pay Later", ButtonBar.ButtonData.CANCEL_CLOSE);
+        alert.getButtonTypes().setAll(payButton, laterButton);
+
+        Optional<ButtonType> result = alert.showAndWait();
+
+        if (result.isPresent() && result.get() == payButton) {
+            ChoiceDialog<String> paymentMethodDialog = new ChoiceDialog<>("Cash", "Cash", "Card");
+            paymentMethodDialog.setTitle("Payment Method");
+            paymentMethodDialog.setHeaderText("Select payment method:");
+            paymentMethodDialog.setContentText("Method:");
+
+            Optional<String> methodResult = paymentMethodDialog.showAndWait();
+            methodResult.ifPresent(method -> {
+                order.setPaymentMethod(method);
+                order.setIsPaid(true);
+                dao.updateOrder(order);
+                showAlert(AlertType.INFORMATION, "Payment Complete", "Payment successful via " + method + ".");
+                showReceipt(order);
+            });
+        } else {
+            showAlert(AlertType.INFORMATION, "Order Placed", "Your order is placed but payment is pending. Please pay later.");
+        }
+    }
+
+    private void showReceipt(Order order) {
+        Alert receiptAlert = new Alert(AlertType.INFORMATION);
+        receiptAlert.setTitle("Receipt");
+        receiptAlert.setHeaderText("Thank you for your order!");
+
+        VBox content = new VBox(5);
+        content.getChildren().add(new Label("Customer: " + order.getCustomerName()));
+        content.getChildren().add(new Label("--- Items ---"));
+        order.getItems().forEach(oi ->
+                content.getChildren().add(new Label(oi.getItem().getName() + " x" + oi.getQuantity() + " = Rs. " + String.format("%.2f", oi.getTotal())))
+        );
+        content.getChildren().add(new Label("----------------"));
+        content.getChildren().add(new Label("Total Paid: Rs. " + String.format("%.2f", order.getTotal())));
+        content.getChildren().add(new Label("Payment Method: " + order.getPaymentMethod()));
+
+        receiptAlert.getDialogPane().setContent(content);
+        receiptAlert.showAndWait();
+    }
+
+
+    private void showReserveTable(String customerName) {
+        TextInputDialog dialog = new TextInputDialog();
+        dialog.setTitle("Table Reservation");
+        dialog.setHeaderText("Enter the table number you wish to reserve.");
+        dialog.setContentText("Table Number:");
+
+        Optional<String> result = dialog.showAndWait();
+        result.ifPresent(tableNumStr -> {
+            try {
+                int tableNumber = Integer.parseInt(tableNumStr);
+                if (tableNumber <= 0) {
+                    showAlert(AlertType.ERROR, "Invalid Input", "Table number must be a positive integer.");
+                    return;
+                }
+                Reservation newReservation = new Reservation(customerName, tableNumber);
+                dao.addReservation(newReservation);
+                allReservations.add(newReservation);
+                showAlert(AlertType.INFORMATION, "Reservation Confirmed", "Table " + tableNumber + " reserved for " + customerName + ".");
+            } catch (NumberFormatException e) {
+                showAlert(AlertType.ERROR, "Invalid Input", "Please enter a valid number for the table.");
+            }
+        });
+    }
+
+    private void showAdminViewMenu(BorderPane parentPane) {
+        TableView<MenuItem> menuTable = new TableView<>();
+        // Always refresh menu items from the database when viewing the admin menu
+        menuItems.setAll(dao.getAllMenuItems());
+        menuTable.setItems(menuItems);
+
+        TableColumn<MenuItem, Integer> idCol = new TableColumn<>("ID");
+        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
+
+        TableColumn<MenuItem, String> nameCol = new TableColumn<>("Name");
+        nameCol.setCellValueFactory(new PropertyValueFactory<>("name"));
+        nameCol.setCellFactory(tc -> new EditingCell<>());
+        nameCol.setOnEditCommit(event -> {
+            MenuItem item = event.getRowValue();
+            item.setName(event.getNewValue());
+            dao.updateMenuItem(item);
+        });
+
+        TableColumn<MenuItem, Double> priceCol = new TableColumn<>("Price (Rs.)");
+        priceCol.setCellValueFactory(new PropertyValueFactory<>("price"));
+        priceCol.setCellFactory(tc -> new EditingCellDouble());
+        priceCol.setOnEditCommit(event -> {
+            MenuItem item = event.getRowValue();
+            item.setPrice(event.getNewValue());
+            dao.updateMenuItem(item);
+        });
+
+        TableColumn<MenuItem, Integer> stockCol = new TableColumn<>("Stock");
+        stockCol.setCellValueFactory(new PropertyValueFactory<>("quantity"));
+        stockCol.setCellFactory(tc -> new EditingCellInteger());
+        stockCol.setOnEditCommit(event -> {
+            MenuItem item = event.getRowValue();
+            item.setQuantity(event.getNewValue());
+            dao.updateMenuItem(item);
+        });
+
+        TableColumn<MenuItem, Void> deleteCol = new TableColumn<>("Delete");
+        deleteCol.setCellFactory(param -> new TableCell<MenuItem, Void>() {
+            private final Button deleteButton = new Button("Delete");
+            {
+                deleteButton.setOnAction(event -> {
+                    MenuItem item = getTableView().getItems().get(getIndex());
+                    confirmAndDeleteMenuItem(item);
+                });
+            }
+
+            @Override
+            protected void updateItem(Void item, boolean empty) {
+                super.updateItem(item, empty);
+                if (empty) {
+                    setGraphic(null);
+                } else {
+                    setGraphic(deleteButton);
+                }
+            }
+        });
+
+
+        menuTable.getColumns().addAll(idCol, nameCol, priceCol, stockCol, deleteCol);
+        menuTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+        menuTable.setEditable(true);
+
+        VBox content = new VBox(10, new Label("Manage Menu Items"), menuTable);
+        content.setPadding(new Insets(20));
+        parentPane.setCenter(content);
+    }
+
+    private void confirmAndDeleteMenuItem(MenuItem item) {
+        Alert alert = new Alert(AlertType.CONFIRMATION);
+        alert.setTitle("Confirm Deletion");
+        alert.setHeaderText("Delete Menu Item: " + item.getName() + "?");
+        alert.setContentText("This action cannot be undone.");
+
+        Optional<ButtonType> result = alert.showAndWait();
+        if (result.isPresent() && result.get() == ButtonType.OK) {
+            dao.deleteMenuItem(item.getId());
+            menuItems.remove(item);
+            showAlert(AlertType.INFORMATION, "Deleted", "Menu item deleted successfully.");
+        }
+    }
+
+
+    private void showAddItemDialog() {
+        Dialog<MenuItem> dialog = new Dialog<>();
+        dialog.setTitle("Add New Menu Item");
+        dialog.setHeaderText("Enter details for the new menu item.");
+
+        ButtonType addButtonType = new ButtonType("Add", ButtonBar.ButtonData.OK_DONE);
+        dialog.getDialogPane().getButtonTypes().addAll(addButtonType, ButtonType.CANCEL);
+
+        GridPane grid = new GridPane();
+        grid.setHgap(10);
+        grid.setVgap(10);
+        grid.setPadding(new Insets(20, 150, 10, 10));
+
+        TextField nameField = new TextField();
+        nameField.setPromptText("Item Name");
+        TextField priceField = new TextField();
+        priceField.setPromptText("Price");
+        TextField quantityField = new TextField();
+        quantityField.setPromptText("Quantity");
+
+        grid.add(new Label("Name:"), 0, 0);
+        grid.add(nameField, 1, 0);
+        grid.add(new Label("Price:"), 0, 1);
+        grid.add(priceField, 1, 1);
+        grid.add(new Label("Quantity:"), 0, 2);
+        grid.add(quantityField, 1, 2);
+
+        dialog.getDialogPane().setContent(grid);
+
+        Platform.runLater(nameField::requestFocus);
+
+        dialog.setResultConverter(dialogButton -> {
+            if (dialogButton == addButtonType) {
+                try {
+                    String name = nameField.getText();
+                    double price = Double.parseDouble(priceField.getText());
+                    int quantity = Integer.parseInt(quantityField.getText());
+                    if (name.trim().isEmpty() || price <= 0 || quantity < 0) {
+                        showAlert(AlertType.ERROR, "Invalid Input", "Please fill all fields correctly. Price must be > 0 and Quantity >= 0.");
+                        return null;
+                    }
+                    MenuItem newItem = new MenuItem(0, name, price, quantity);
+                    dao.addMenuItem(newItem);
+                    menuItems.setAll(dao.getAllMenuItems()); // Refresh menuItems list after adding a new item
+                    showAlert(AlertType.INFORMATION, "Item Added", "New item '" + name + "' added successfully.");
+                    return newItem;
+                } catch (NumberFormatException e) {
+                    showAlert(AlertType.ERROR, "Invalid Input", "Please enter valid numbers for Price and Quantity.");
+                    return null;
+                }
+            }
+            return null;
+        });
+
+        dialog.showAndWait();
+    }
+
+    private void showViewOrders(BorderPane parentPane) {
+        allOrders.setAll(dao.getAllOrders()); // Refresh from DB
+
+        TableView<Order> ordersTable = new TableView<>();
+        ordersTable.setItems(allOrders);
+
+        TableColumn<Order, Integer> idCol = new TableColumn<>("Order ID");
+        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
+
+        TableColumn<Order, String> customerCol = new TableColumn<>("Customer Name");
+        customerCol.setCellValueFactory(new PropertyValueFactory<>("customerName"));
+
+        TableColumn<Order, Double> totalCol = new TableColumn<>("Total (Rs.)");
+        totalCol.setCellValueFactory(new PropertyValueFactory<>("total"));
+
+        TableColumn<Order, Boolean> paidCol = new TableColumn<>("Paid");
+        paidCol.setCellValueFactory(new PropertyValueFactory<>("isPaid"));
+
+        TableColumn<Order, String> paymentMethodCol = new TableColumn<>("Payment Method");
+        paymentMethodCol.setCellValueFactory(new PropertyValueFactory<>("paymentMethod"));
+
+        ordersTable.getColumns().addAll(idCol, customerCol, totalCol, paidCol, paymentMethodCol);
+        ordersTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        ordersTable.getSelectionModel().selectedItemProperty().addListener((obs, oldSelection, newSelection) -> {
+            if (newSelection != null) {
+                showOrderDetails(newSelection);
+            }
+        });
+
+        VBox content = new VBox(10, new Label("All Orders"), ordersTable);
+        content.setPadding(new Insets(20));
+        parentPane.setCenter(content);
+    }
+
+    private void showOrderDetails(Order order) {
+        Alert alert = new Alert(AlertType.INFORMATION);
+        alert.setTitle("Order Details - ID: " + order.getId());
+        alert.setHeaderText("Customer: " + order.getCustomerName() + " | Total: Rs. " + String.format("%.2f", order.getTotal()));
+
+        VBox content = new VBox(5);
+        content.getChildren().add(new Label("Paid: " + (order.getIsPaid() ? "Yes" : "No")));
+        content.getChildren().add(new Label("Payment Method: " + order.getPaymentMethod()));
+        content.getChildren().add(new Label("\n--- Items ---"));
+        order.getItems().forEach(oi ->
+                content.getChildren().add(new Label(oi.getItem().getName() + " x" + oi.getQuantity() + " = Rs. " + String.format("%.2f", oi.getTotal())))
+        );
+
+        ButtonType payButton = new ButtonType("Mark as Paid", ButtonBar.ButtonData.OK_DONE);
+        ButtonType closeButton = new ButtonType("Close", ButtonBar.ButtonData.CANCEL_CLOSE);
+
+        if (!order.getIsPaid()) {
+            alert.getButtonTypes().setAll(payButton, closeButton);
+        } else {
+            alert.getButtonTypes().setAll(closeButton);
+        }
+
+        alert.getDialogPane().setContent(content);
+
+        Optional<ButtonType> result = alert.showAndWait();
+        if (result.isPresent() && result.get() == payButton) {
+            ChoiceDialog<String> paymentDialog = new ChoiceDialog<>("Cash", "Cash", "Card");
+            paymentDialog.setTitle("Mark Order as Paid");
+            paymentDialog.setHeaderText("Select payment method:");
+            paymentDialog.setContentText("Method:");
+
+            Optional<String> paymentResult = paymentDialog.showAndWait();
+            paymentResult.ifPresent(method -> {
+                order.setPaymentMethod(method);
+                order.setIsPaid(true);
+                dao.updateOrder(order);
+                showAlert(AlertType.INFORMATION, "Order Updated", "Order " + order.getId() + " marked as paid via " + method + ".");
+                allOrders.setAll(dao.getAllOrders()); // Refresh orders list
+            });
+        }
+    }
+
+
+    private void showViewSales() {
+        double totalSales = dao.getTotalSales();
+        showAlert(AlertType.INFORMATION, "Total Sales", "Overall Total Sales: Rs. " + String.format("%.2f", totalSales));
+    }
+
+    private void showViewReservations(BorderPane parentPane) {
+        allReservations.setAll(dao.getAllReservations()); // Refresh from DB
+
+        TableView<Reservation> reservationsTable = new TableView<>();
+        reservationsTable.setItems(allReservations);
+
+        TableColumn<Reservation, Integer> idCol = new TableColumn<>("Reservation ID");
+        idCol.setCellValueFactory(new PropertyValueFactory<>("id"));
+
+        TableColumn<Reservation, String> customerCol = new TableColumn<>("Customer Name");
+        customerCol.setCellValueFactory(new PropertyValueFactory<>("customerName"));
+
+        TableColumn<Reservation, Integer> tableNumCol = new TableColumn<>("Table Number");
+        tableNumCol.setCellValueFactory(new PropertyValueFactory<>("tableNumber"));
+
+        reservationsTable.getColumns().addAll(idCol, customerCol, tableNumCol);
+        reservationsTable.setColumnResizePolicy(TableView.CONSTRAINED_RESIZE_POLICY);
+
+        VBox content = new VBox(10, new Label("All Reservations"), reservationsTable);
+        content.setPadding(new Insets(20));
+        parentPane.setCenter(content);
+    }
+
+    private void showAlert(AlertType type, String title, String message) {
+        Alert alert = new Alert(type);
+        alert.setTitle(title);
+        alert.setHeaderText(null);
+        alert.setContentText(message);
+        alert.showAndWait();
+    }
+
+    public static void main(String[] args) {
+        RestaurantDAO.initializeDatabase(); // Call static method to initialize DB
+        launch(args);
+    }
+
+    // --- Custom Cell Factories for editable TableView columns ---
+    class EditingCell<T> extends TableCell<T, String> {
+        private TextField textField;
+
+        public EditingCell() {}
+
+        @Override
+        public void startEdit() {
+            if (!isEmpty()) {
+                super.startEdit();
+                createTextField();
+                setText(null);
+                setGraphic(textField);
+                textField.selectAll();
+            }
+        }
+
+        @Override
+        public void cancelEdit() {
+            super.cancelEdit();
+            setText(getItem());
+            setGraphic(null);
+        }
+
+        @Override
+        public void updateItem(String item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty) {
+                setText(null);
+                setGraphic(null);
+            } else {
+                if (isEditing()) {
+                    if (textField != null) {
+                        textField.setText(getString());
+                    }
+                    setText(null);
+                    setGraphic(textField);
+                } else {
+                    setText(getString());
+                    setGraphic(null);
+                }
+            }
+        }
+
+        private void createTextField() {
+            textField = new TextField(getString());
+            textField.setMinWidth(this.getWidth() - this.getGraphicTextGap() * 2);
+            textField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+                if (!newValue) {
+                    commitEdit(textField.getText());
+                }
+            });
+            textField.setOnAction(event -> commitEdit(textField.getText()));
+        }
+
+        private String getString() {
+            return getItem() == null ? "" : getItem().toString();
+        }
+    }
+
+    class EditingCellDouble extends TableCell<MenuItem, Double> {
+        private TextField textField;
+
+        @Override
+        public void startEdit() {
+            if (!isEmpty()) {
+                super.startEdit();
+                createTextField();
+                setText(null);
+                setGraphic(textField);
+                textField.selectAll();
+            }
+        }
+
+        @Override
+        public void cancelEdit() {
+            super.cancelEdit();
+            setText(String.valueOf(getItem()));
+            setGraphic(null);
+        }
+
+        @Override
+        public void updateItem(Double item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty) {
+                setText(null);
+                setGraphic(null);
+            } else {
+                if (isEditing()) {
+                    if (textField != null) {
+                        textField.setText(getString());
+                    }
+                    setText(null);
+                    setGraphic(textField);
+                } else {
+                    setText(getString());
+                    setGraphic(null);
+                }
+            }
+        }
+
+        private void createTextField() {
+            textField = new TextField(getString());
+            textField.setMinWidth(this.getWidth() - this.getGraphicTextGap() * 2);
+            textField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+                if (!newValue) {
+                    try {
+                        commitEdit(Double.parseDouble(textField.getText()));
+                    } catch (NumberFormatException e) {
+                        showAlert(AlertType.ERROR, "Invalid Input", "Please enter a valid number for price.");
+                        cancelEdit();
+                    }
+                }
+            });
+            textField.setOnAction(event -> {
+                try {
+                    commitEdit(Double.parseDouble(textField.getText()));
+                } catch (NumberFormatException e) {
+                    showAlert(AlertType.ERROR, "Invalid Input", "Please enter a valid number for price.");
+                    cancelEdit();
+                }
+            });
+        }
+
+        private String getString() {
+            return getItem() == null ? "" : getItem().toString();
+        }
+    }
+
+    class EditingCellInteger extends TableCell<MenuItem, Integer> {
+        private TextField textField;
+
+        @Override
+        public void startEdit() {
+            if (!isEmpty()) {
+                super.startEdit();
+                createTextField();
+                setText(null);
+                setGraphic(textField);
+                textField.selectAll();
+            }
+        }
+
+        @Override
+        public void cancelEdit() {
+            super.cancelEdit();
+            setText(String.valueOf(getItem()));
+            setGraphic(null);
+        }
+
+        @Override
+        public void updateItem(Integer item, boolean empty) {
+            super.updateItem(item, empty);
+            if (empty) {
+                setText(null);
+                setGraphic(null);
+            } else {
+                if (isEditing()) {
+                    if (textField != null) {
+                        textField.setText(getString());
+                    }
+                    setText(null);
+                    setGraphic(textField);
+                } else {
+                    setText(getString());
+                    setGraphic(null);
+                }
+            }
+        }
+
+        private void createTextField() {
+            textField = new TextField(getString());
+            textField.setMinWidth(this.getWidth() - this.getGraphicTextGap() * 2);
+            textField.focusedProperty().addListener((observable, oldValue, newValue) -> {
+                if (!newValue) {
+                    try {
+                        commitEdit(Integer.parseInt(textField.getText()));
+                    } catch (NumberFormatException e) {
+                        showAlert(AlertType.ERROR, "Invalid Input", "Please enter a valid integer for quantity.");
+                        cancelEdit();
+                    }
+                }
+            });
+            textField.setOnAction(event -> {
+                try {
+                    commitEdit(Integer.parseInt(textField.getText()));
+                } catch (NumberFormatException e) {
+                    showAlert(AlertType.ERROR, "Invalid Input", "Please enter a valid integer for quantity.");
+                    cancelEdit();
+                }
+            });
+        }
+
+        private String getString() {
+            return getItem() == null ? "" : getItem().toString();
+        }
+    }
+}
